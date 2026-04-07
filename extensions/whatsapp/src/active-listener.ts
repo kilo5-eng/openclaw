@@ -5,6 +5,13 @@ import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import { resolveDefaultWhatsAppAccountId } from "./accounts.js";
 
 export type ActiveWebSendOptions = {
+  quotedMessageKey?: {
+    id: string;
+    remoteJid: string;
+    fromMe: boolean;
+    participant?: string;
+    messageText?: string;
+  };
   gifPlayback?: boolean;
   accountId?: string;
   fileName?: string;
