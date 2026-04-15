@@ -69,12 +69,31 @@ const MAX_WORKSPACE_SKILL_ESCAPE_DETAIL_ROWS = 12;
  * timeout resolves. Callers make sequential (not concurrent) calls so at most
  * one libuv thread is occupied at a time; the OS will eventually time out the
  * stuck NFS/SMB call independently.
+ *
+ * Timer cleanup: when realpath resolves before the deadline the timer is
+ * cleared immediately so it does not linger across the rest of the audit run.
+ * The timer is also unref'd so it cannot prevent process exit even if it fires
+ * late (e.g. the process finishes while a hang is still in-flight).
  */
 function realpathWithTimeout(p: string, timeoutMs = 2000): Promise<string | null> {
-  return Promise.race([
-    fs.realpath(p).catch(() => null),
-    new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
-  ]);
+  let timerHandle: ReturnType<typeof setTimeout> | undefined;
+
+  const realpathPromise = fs
+    .realpath(p)
+    .catch(() => null)
+    .then((result) => {
+      clearTimeout(timerHandle);
+      return result;
+    });
+
+  const timeoutPromise = new Promise<null>((resolve) => {
+    timerHandle = setTimeout(() => resolve(null), timeoutMs);
+    // Prevent the timer from keeping the process alive while waiting on a
+    // potentially hanging NFS/SMB path during a large audit run.
+    timerHandle.unref?.();
+  });
+
+  return Promise.race([realpathPromise, timeoutPromise]);
 }
 let skillsModulePromise: Promise<typeof import("../agents/skills.js")> | undefined;
 let configModulePromise: Promise<typeof import("../config/config.js")> | undefined;
