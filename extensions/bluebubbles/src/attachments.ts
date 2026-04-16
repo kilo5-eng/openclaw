@@ -27,8 +27,12 @@ import {
   type SsrFPolicy,
 } from "./types.js";
 
-function blueBubblesPolicy(allowPrivateNetwork: boolean | undefined): SsrFPolicy {
-  return allowPrivateNetwork ? { allowPrivateNetwork: true } : {};
+function blueBubblesPolicy(allowPrivateNetwork: boolean | undefined): SsrFPolicy | undefined {
+  // Pass `undefined` (not `{}`) for the non-private case so the non-SSRF fallback path
+  // is used. An empty `{}` policy routes through the SSRF guard, which blocks the
+  // localhost BB deployments that are the most common self-hosted setup. The opt-in
+  // private-network branch keeps the explicit policy. (#64105, #67510)
+  return allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined;
 }
 
 export type BlueBubblesAttachmentOpts = {

@@ -249,15 +249,16 @@ export async function handleBlueBubblesWebhookRequest(
         return true;
       }
       const reaction = normalizeWebhookReaction(payload);
+      // Normalize the webhook message early so the attachment-update detection
+      // below sees attachments under any supported wrapper format (`payload.data`,
+      // `payload.message`, `payload.data.message`, JSON-string payloads), not just
+      // raw `payload.data.attachments`. (#65430, #67510)
+      const message = reaction ? null : normalizeWebhookMessage(payload, { eventType });
       // BlueBubbles fires `updated-message` when attachments are indexed after the
       // initial `new-message` (which may arrive with attachments: []). Let those
       // through so the agent can ingest the image. (#65430)
-      const dataRecord = asRecord(payload.data);
-      const dataAttachments = dataRecord?.attachments;
       const isAttachmentUpdate =
-        eventType === "updated-message" &&
-        Array.isArray(dataAttachments) &&
-        dataAttachments.length > 0;
+        eventType === "updated-message" && (message?.attachments?.length ?? 0) > 0;
       if (
         (eventType === "updated-message" ||
           eventType === "message-reaction" ||
@@ -271,12 +272,11 @@ export async function handleBlueBubblesWebhookRequest(
           logVerbose(
             firstTarget.core,
             firstTarget.runtime,
-            `webhook ignored ${eventType || "event"} without reaction`,
+            `webhook ignored ${eventType || "event"} (no reaction or attachment update)`,
           );
         }
         return true;
       }
-      const message = reaction ? null : normalizeWebhookMessage(payload, { eventType });
       if (!message && !reaction) {
         res.statusCode = 400;
         res.end("invalid payload");

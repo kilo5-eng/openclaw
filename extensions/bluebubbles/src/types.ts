@@ -1,5 +1,6 @@
 import type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/setup";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetch as undiciFetch } from "undici";
 
 export type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 export type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/setup";
@@ -175,16 +176,26 @@ export async function blueBubblesFetchWithTimeout(
       await release();
     }
   }
-  // Strip `dispatcher` from init — the SSRF guard may have attached a bundled-undici
-  // dispatcher that is incompatible with Node 22+'s built-in undici backing globalThis.fetch().
-  // Passing it through causes a silent TypeError (invalid onRequestStart method). (#64105)
-  const { dispatcher: _dispatcher, ...safeInit } = (init ?? {}) as RequestInit & {
-    dispatcher?: unknown;
-  };
+  // The SSRF guard (and other guarded callers using this function as their
+  // `fetchImpl`) may attach a bundled-undici `dispatcher` to `init` to enforce DNS
+  // pinning per request. That dispatcher is incompatible with Node 22+'s built-in
+  // undici backing globalThis.fetch and causes a silent TypeError (invalid
+  // onRequestStart method) when forwarded — but it works correctly with the
+  // bundled-undici `fetch`. When a dispatcher is present, route through bundled
+  // undici so the DNS-pinning contract is preserved; otherwise stay on
+  // globalThis.fetch. (#64105, #67510)
+  const initWithDispatcher = (init ?? {}) as RequestInit & { dispatcher?: unknown };
+  const hasDispatcher = initWithDispatcher.dispatcher !== undefined;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { ...safeInit, signal: controller.signal });
+    if (hasDispatcher) {
+      return (await undiciFetch(url, {
+        ...initWithDispatcher,
+        signal: controller.signal,
+      } as Parameters<typeof undiciFetch>[1])) as unknown as Response;
+    }
+    return await fetch(url, { ...initWithDispatcher, signal: controller.signal });
   } finally {
     clearTimeout(timer);
   }
