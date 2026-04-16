@@ -95,6 +95,79 @@ function readMediaFetchErrorCode(error: unknown): MediaFetchErrorCode | undefine
     : undefined;
 }
 
+/**
+ * Fetch attachment metadata for a message from the BlueBubbles API.
+ *
+ * BlueBubbles sometimes fires the `new-message` webhook before attachment
+ * indexing is complete, so `attachments` arrives as `[]`. This function
+ * GETs the message by GUID and returns whatever attachments the server
+ * has indexed by now. (#65430, #67437)
+ */
+export async function fetchBlueBubblesMessageAttachments(
+  messageGuid: string,
+  opts: {
+    baseUrl: string;
+    password: string;
+    timeoutMs?: number;
+    allowPrivateNetwork?: boolean;
+  },
+): Promise<BlueBubblesAttachment[]> {
+  const url = buildBlueBubblesApiUrl({
+    baseUrl: opts.baseUrl,
+    path: `/api/v1/message/${encodeURIComponent(messageGuid)}`,
+    password: opts.password,
+  });
+  const policy = opts.allowPrivateNetwork ? { allowPrivateNetwork: true } : {};
+  const response = await blueBubblesFetchWithTimeout(
+    url,
+    { method: "GET" },
+    opts.timeoutMs,
+    policy,
+  );
+  if (!response.ok) {
+    return [];
+  }
+  const json = (await response.json()) as Record<string, unknown>;
+  const data = json.data as Record<string, unknown> | undefined;
+  const rawAttachments = data?.attachments;
+  if (!Array.isArray(rawAttachments)) {
+    return [];
+  }
+  const out: BlueBubblesAttachment[] = [];
+  for (const entry of rawAttachments) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const guid = typeof record.guid === "string" ? record.guid.trim() : undefined;
+    if (!guid) {
+      continue;
+    }
+    out.push({
+      guid,
+      mimeType:
+        typeof record.mimeType === "string"
+          ? record.mimeType
+          : typeof record.mime_type === "string"
+            ? record.mime_type
+            : undefined,
+      transferName:
+        typeof record.transferName === "string"
+          ? record.transferName
+          : typeof record.transfer_name === "string"
+            ? record.transfer_name
+            : undefined,
+      totalBytes:
+        typeof record.totalBytes === "number"
+          ? record.totalBytes
+          : typeof record.total_bytes === "number"
+            ? record.total_bytes
+            : undefined,
+    });
+  }
+  return out;
+}
+
 export async function downloadBlueBubblesAttachment(
   attachment: BlueBubblesAttachment,
   opts: BlueBubblesAttachmentOpts & { maxBytes?: number } = {},

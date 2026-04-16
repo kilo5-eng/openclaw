@@ -175,10 +175,16 @@ export async function blueBubblesFetchWithTimeout(
       await release();
     }
   }
+  // Strip `dispatcher` from init — the SSRF guard may have attached a bundled-undici
+  // dispatcher that is incompatible with Node 22+'s built-in undici backing globalThis.fetch().
+  // Passing it through causes a silent TypeError (invalid onRequestStart method). (#64105)
+  const { dispatcher: _dispatcher, ...safeInit } = (init ?? {}) as RequestInit & {
+    dispatcher?: unknown;
+  };
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { ...init, signal: controller.signal });
+    return await fetch(url, { ...safeInit, signal: controller.signal });
   } finally {
     clearTimeout(timer);
   }

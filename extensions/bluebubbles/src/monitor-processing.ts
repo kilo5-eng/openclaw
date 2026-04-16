@@ -9,7 +9,10 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/text-runtime";
-import { downloadBlueBubblesAttachment } from "./attachments.js";
+import {
+  downloadBlueBubblesAttachment,
+  fetchBlueBubblesMessageAttachments,
+} from "./attachments.js";
 import { markBlueBubblesChatRead, sendBlueBubblesTyping } from "./chat.js";
 import { resolveBlueBubblesConversationRoute } from "./conversation-route.js";
 import { fetchBlueBubblesHistory } from "./history.js";
@@ -1065,14 +1068,52 @@ async function processMessageAfterDedupe(
       ? account.config.mediaMaxMb * 1024 * 1024
       : 8 * 1024 * 1024;
 
+  // BlueBubbles may fire the webhook before attachment indexing is complete,
+  // so the initial `attachments` array can be empty for messages that actually
+  // have media. When the message text is empty (image-only) or this is an
+  // `updated-message` event, wait briefly and re-fetch from the BB API as a
+  // fallback for cases where BB doesn't send a follow-up webhook. (#65430, #67437)
+  let resolvedAttachments = attachments;
+  const shouldRetryAttachments =
+    resolvedAttachments.length === 0 &&
+    message.messageId &&
+    baseUrl &&
+    password &&
+    (text.length === 0 || message.eventType === "updated-message");
+  if (shouldRetryAttachments) {
+    try {
+      await new Promise<void>((resolve) => setTimeout(resolve, 2_000));
+      const fetched = await fetchBlueBubblesMessageAttachments(message.messageId!, {
+        baseUrl,
+        password,
+        timeoutMs: 10_000,
+        allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
+      });
+      if (fetched.length > 0) {
+        logVerbose(
+          core,
+          runtime,
+          `attachment retry found ${fetched.length} attachment(s) for msgId=${message.messageId}`,
+        );
+        resolvedAttachments = fetched;
+      }
+    } catch (err) {
+      logVerbose(
+        core,
+        runtime,
+        `attachment retry failed for msgId=${message.messageId}: ${String(err)}`,
+      );
+    }
+  }
+
   let mediaUrls: string[] = [];
   let mediaPaths: string[] = [];
   let mediaTypes: string[] = [];
-  if (attachments.length > 0) {
+  if (resolvedAttachments.length > 0) {
     if (!baseUrl || !password) {
       logVerbose(core, runtime, "attachment download skipped (missing serverUrl/password)");
     } else {
-      for (const attachment of attachments) {
+      for (const attachment of resolvedAttachments) {
         if (!attachment.guid) {
           continue;
         }
